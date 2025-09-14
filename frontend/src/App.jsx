@@ -1,168 +1,99 @@
 import React, { useState } from "react";
-import {
-  Box, Container, Grid, Typography, AppBar, Toolbar,
-  IconButton, Button
-} from "@mui/material";
-import CloudUploadIcon from "@mui/icons-material/CloudUpload";
-import SaveIcon from "@mui/icons-material/Save";
-import DownloadIcon from "@mui/icons-material/Download";
-import FileUpload from "./components/FileUpload";
-import PreviewPanel from "./components/PreviewPanel";
-import ResultsPanel from "./components/ResultsPanel";
-import SummaryPanel from "./components/SummaryPanel";
 import axios from "axios";
-
-// Clerk
-import { useAuth, SignedIn, SignedOut, SignInButton, SignUpButton } from "@clerk/clerk-react";
+import Navbar from "./components/Navbar";
+import UploadForm from "./components/UploadForm";
+import DocumentPreview from "./components/DocumentPreview";
+import ValidationResults from "./components/ValidationResults";
+import SummaryPanel from "./components/SummaryPanel";
 
 export default function App() {
-  const [uploading, setUploading] = useState(false);
-  const [documentFile, setDocumentFile] = useState(null);
-  const [results, setResults] = useState(null);
+  const [file, setFile] = useState(null);           // selected File object
+  const [fields, setFields] = useState([]);         // [{name,value}, ...]
+  const [errors, setErrors] = useState({});         // { Field_3: "msg", ... }
+  const [summary, setSummary] = useState(null);     // { total, valid, review, errors }
+  const [resultsReady, setResultsReady] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
-  const { getToken } = useAuth(); // Clerk hook
+  // Called when UploadForm selects/changes file
+  const handleFileSelect = (f) => {
+    setFile(f);
+    setResultsReady(false);
+    setFields([]);
+    setErrors({});
+    setSummary(null);
+  };
 
-  // Handle file upload with backend JWT auth
-  async function handleFile(file) {
-    setUploading(true);
-    setDocumentFile(file);
-
-    try {
-      const token = await getToken(); // get JWT from Clerk
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const res = await axios.post(
-        `${process.env.VITE_API_BASE_URL}/api/ocr`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-            Authorization: `Bearer ${token}`, // send JWT
-          },
-        }
-      );
-
-      console.log("✅ Backend Response:", res.data);
-      setResults(res.data);
-    } catch (err) {
-      console.error("❌ Error connecting to backend:", err);
-      setResults({ error: "Backend connection failed" });
-    } finally {
-      setUploading(false);
+  // Called from UploadForm -> triggers HTTP upload to backend
+  const handleUpload = async (f) => {
+    if (!f) {
+      alert("Select a file before uploading.");
+      return;
     }
-  }
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", f);
 
-  // Update field manually
-  function handleUpdateField(fieldName, newValue) {
-    setResults((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        fields: prev.fields.map((f) =>
-          f.field === fieldName
-            ? {
-                ...f,
-                value: newValue,
-                resolvedManually: true,
-                status: f.status === "error" ? "warn" : f.status,
-              }
-            : f
-        ),
-      };
-    });
-  }
+      const res = await axios.post("http://localhost:5000/api/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 20000,
+      });
 
-  // Export results to JSON
-  function handleExport() {
-    const blob = new Blob([JSON.stringify(results, null, 2)], {
-      type: "application/json",
-    });
-    const href = URL.createObjectURL(blob);
+      const data = res.data;
+      // backend returns fields: array, errors: object, summary: object
+      setFields(data.fields || []);
+      setErrors(data.errors || {});
+      setSummary(data.summary || null);
+      setResultsReady(true);
+    } catch (err) {
+      console.error("Upload error:", err);
+      alert("Upload failed — check backend console and network tab.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Export the full validation result (fields + errors + summary)
+  const handleExport = () => {
+    if (!resultsReady) {
+      alert("No results to export");
+      return;
+    }
+    const payload = { fields, errors, summary, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = href;
-    a.download = "validated_output.json";
+    a.href = url;
+    a.download = `validation-results-${Date.now()}.json`;
     a.click();
-    URL.revokeObjectURL(href);
-  }
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
-      {/* -------- When Signed Out -------- */}
-      <SignedOut>
-        <Box
-          sx={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            height: "100vh",
-            gap: 2,
-          }}
-        >
-          <Typography variant="h4">Welcome to Health Insurance Validator</Typography>
+    <div className="min-h-screen">
+      <Navbar onExport={handleExport} exportDisabled={!resultsReady} />
+      <div className="p-4 grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Left column: upload + preview */}
+        <div className="col-span-1 space-y-4">
+          <UploadForm
+            onFileSelect={handleFileSelect}
+            onUpload={handleUpload}
+            selectedFile={file}
+            isUploading={isUploading}
+          />
+          <DocumentPreview file={file} uploadedFileInfo={null} />
+        </div>
 
-          <SignInButton>
-            <Button variant="contained" color="primary">
-              Sign In
-            </Button>
-          </SignInButton>
+        {/* Middle: validation results */}
+        <div className="col-span-1 lg:col-span-2">
+          <ValidationResults fields={fields} errors={errors} />
+        </div>
 
-          <SignUpButton>
-            <Button variant="outlined" color="secondary">
-              Sign Up
-            </Button>
-          </SignUpButton>
-        </Box>
-      </SignedOut>
-
-      {/* -------- When Signed In -------- */}
-      <SignedIn>
-        <AppBar position="static">
-          <Toolbar>
-            <Typography variant="h6" sx={{ flexGrow: 1 }}>
-              Health Insurance Document Validator
-            </Typography>
-            <IconButton color="inherit">
-              <SaveIcon />
-            </IconButton>
-            <Button color="inherit" startIcon={<DownloadIcon />} onClick={handleExport}>
-              Export
-            </Button>
-          </Toolbar>
-        </AppBar>
-
-        <Container maxWidth="xl" sx={{ py: 3 }}>
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={3}>
-              <FileUpload onUpload={handleFile} uploading={uploading} />
-              <Box mt={2}>
-                <PreviewPanel file={documentFile} />
-              </Box>
-              <Box mt={2}>
-                <Typography variant="caption" color="text.secondary">
-                  Included: CMS-1500 template & validation scenarios in /assets
-                </Typography>
-              </Box>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <ResultsPanel results={results} onUpdateField={handleUpdateField} />
-            </Grid>
-            <Grid item xs={12} md={3}>
-              <SummaryPanel results={results} />
-              <Box mt={2}>
-                <Button
-                  variant="contained"
-                  startIcon={<CloudUploadIcon />}
-                  fullWidth
-                >
-                  Apply Suggestions
-                </Button>
-              </Box>
-            </Grid>
-          </Grid>
-        </Container>
-      </SignedIn>
-    </Box>
+        {/* Right: summary */}
+        <div className="col-span-1">
+          <SummaryPanel summary={summary} />
+        </div>
+      </div>
+    </div>
   );
 }
